@@ -1,167 +1,71 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Layers, Wand2 } from 'lucide-react';
-import UploadZone from './components/UploadZone';
-import Controls from './components/Controls';
-import { generateStencil } from './utils/imageProcessor';
-import { StencilSettings } from './types';
+import streamlit as st
+import cv2
+import numpy as np
+from PIL import Image
+import io
 
-const INITIAL_SETTINGS: StencilSettings = {
-  lowThreshold: 30,
-  highThreshold: 100,
-  blurRadius: 2,
-  inverted: true
-};
+st.set_page_config(page_title="Generatore Stencil Tatuaggi", layout="wide")
 
-function App() {
-  const [originalImage, setOriginalImage] = useState<string | null>(null);
-  const [processedImage, setProcessedImage] = useState<string | null>(null);
-  const [settings, setSettings] = useState<StencilSettings>(INITIAL_SETTINGS);
-  const [isProcessing, setIsProcessing] = useState(false);
+st.title("🐍 InkFlow: Generatore Stencil Tatuaggi")
+st.markdown("Trasforma le tue foto in uno stencil pulito in bianco e nero usando l'algoritmo Canny.")
 
-  // Debounce logic for processing to avoid UI lag on slider drag
-  useEffect(() => {
-    if (!originalImage) return;
+# --- 1. Caricamento Immagine ---
+uploaded_file = st.file_uploader("Carica la foto qui (PNG o JPG)", type=['jpg', 'png', 'jpeg'])
 
-    const timer = setTimeout(async () => {
-      setIsProcessing(true);
-      try {
-        const result = await generateStencil(
-          originalImage,
-          settings.lowThreshold,
-          settings.highThreshold,
-          settings.blurRadius
-        );
-        setProcessedImage(result);
-      } catch (error) {
-        console.error("Processing failed", error);
-      } finally {
-        setIsProcessing(false);
-      }
-    }, 150); // 150ms debounce
+if uploaded_file is not None:
+    # Convertiamo il file caricato in un'immagine leggibile da OpenCV
+    image = Image.open(uploaded_file)
+    img_array = np.array(image.convert('RGB'))
+    
+    st.sidebar.header("Regola i Dettagli dello Stencil")
 
-    return () => clearTimeout(timer);
-  }, [originalImage, settings.lowThreshold, settings.highThreshold, settings.blurRadius]);
+    # --- 2. Slider per le regolazioni (L'utente decide i dettagli) ---
+    soglia1 = st.sidebar.slider("Soglia Canny Minima", 0, 255, 100)
+    soglia2 = st.sidebar.slider("Soglia Canny Massima", 0, 255, 200)
+    blur = st.sidebar.slider("Raggio Sfocatura (Blur)", 1, 15, 5, step=2) # Deve essere dispari
 
-  const handleImageSelect = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      if (e.target?.result) {
-        setOriginalImage(e.target.result as string);
-        // Reset processed image to show loading state effectively
-        setProcessedImage(null); 
-      }
-    };
-    reader.readAsDataURL(file);
-  };
+    # --- 3. La Magia (Algoritmo Canny per i bordi) ---
+    
+    # Convertiamo in scala di grigi
+    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    
+    # Sfocatura per togliere il rumore
+    blurred = cv2.GaussianBlur(gray, (blur, blur), 0)
+    
+    # Troviamo i bordi (Stencil)
+    edges = cv2.Canny(blurred, soglia1, soglia2)
+    
+    # Invertiamo i colori (Linee nere su sfondo bianco - standard per stencil)
+    edges_inverted = cv2.bitwise_not(edges)
 
-  const handleSettingChange = (key: keyof StencilSettings, value: number) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
-  };
+    # Convertiamo l'array OpenCV in un'immagine PIL per il download
+    img_stencil_pil = Image.fromarray(edges_inverted)
+    
+    # --- 4. Mostriamo il risultato ---
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Originale")
+        st.image(image, use_column_width=True)
+    
+    with col2:
+        st.subheader("Risultato Stencil")
+        st.image(edges_inverted, use_column_width=True)
+        
+        # --- 5. Bottone per scaricare ---
+        
+        # Salviamo l'immagine in memoria come PNG per il download
+        buf = io.BytesIO()
+        img_stencil_pil.save(buf, format="PNG")
+        byte_im = buf.getvalue()
+        
+        st.download_button(
+            label="Scarica Stencil PNG",
+            data=byte_im,
+            file_name="inkflow_stencil.png",
+            mime="image/png"
+        )
+        st.info("Consiglio: Stampa questo file in modalità 'Carta Copiativa' o 'Ectografica'.")
 
-  const handleReset = () => {
-    setOriginalImage(null);
-    setProcessedImage(null);
-    setSettings(INITIAL_SETTINGS);
-  };
-
-  const handleDownload = () => {
-    if (!processedImage) return;
-    const link = document.createElement('a');
-    link.download = 'inkflow-stencil.png';
-    link.href = processedImage;
-    link.click();
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-900 text-slate-200 pb-20">
-      {/* Header */}
-      <header className="bg-slate-950/50 border-b border-slate-800 sticky top-0 z-10 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-3">
-          <div className="bg-gradient-to-br from-teal-500 to-emerald-600 p-2 rounded-lg shadow-lg shadow-teal-900/30">
-            <Layers className="w-6 h-6 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-teal-200 to-emerald-400">
-              InkFlow
-            </h1>
-            <p className="text-xs text-slate-500 font-medium tracking-wide">TATTOO STENCIL GENERATOR</p>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-10">
-        {!originalImage ? (
-          <div className="flex flex-col items-center justify-center min-h-[60vh]">
-            <div className="text-center mb-8">
-              <h2 className="text-4xl font-bold text-white mb-4">Turn Photos into Stencils.</h2>
-              <p className="text-slate-400 max-w-md mx-auto">
-                Upload any reference photo and instantly generate a clean, printable line-work stencil for tattooing.
-              </p>
-            </div>
-            <UploadZone onImageSelected={handleImageSelect} />
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-            {/* Controls Sidebar */}
-            <div className="lg:col-span-1">
-              <Controls 
-                settings={settings}
-                onSettingChange={handleSettingChange}
-                onReset={handleReset}
-                onDownload={handleDownload}
-                isProcessing={isProcessing}
-                hasResult={!!processedImage}
-              />
-            </div>
-
-            {/* Preview Area */}
-            <div className="lg:col-span-3 space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Original View */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-slate-400 uppercase tracking-wider">Original</span>
-                  </div>
-                  <div className="aspect-[3/4] bg-slate-800 rounded-xl overflow-hidden border border-slate-700 relative">
-                    <img 
-                      src={originalImage} 
-                      alt="Original" 
-                      className="w-full h-full object-contain"
-                    />
-                  </div>
-                </div>
-
-                {/* Stencil View */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-teal-400 uppercase tracking-wider flex items-center gap-2">
-                      <Wand2 className="w-4 h-4" />
-                      Stencil Result
-                    </span>
-                    {isProcessing && <span className="text-xs text-emerald-500 animate-pulse">Processing...</span>}
-                  </div>
-                  <div className="aspect-[3/4] bg-white rounded-xl overflow-hidden border border-slate-700 relative flex items-center justify-center">
-                    {processedImage ? (
-                      <img 
-                        src={processedImage} 
-                        alt="Stencil" 
-                        className={`w-full h-full object-contain transition-opacity duration-300 ${isProcessing ? 'opacity-80' : 'opacity-100'}`}
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center gap-2 text-slate-300">
-                        <div className="w-8 h-8 border-4 border-slate-300 border-t-teal-500 rounded-full animate-spin"></div>
-                        <span className="text-sm">Processing Edges...</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </main>
-    </div>
-  );
-}
-
-export default App;
+else:
+    st.info("Inizia caricando un'immagine per generare il tuo stencil!")
